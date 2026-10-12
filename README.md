@@ -4,7 +4,7 @@
 
 **Bộ script bash tiếng Việt chuẩn hóa máy Ubuntu Desktop cho đội lập trình web/app**
 
-Cài môi trường · Gỡ sạch có kiểm soát · Chẩn đoán hiệu năng · Xác thực trạng thái
+Cài môi trường · Gỡ sạch có kiểm soát · Chẩn đoán hiệu năng · Xác thực trạng thái · Quản lý nginx & project local
 
 ![Ubuntu](https://img.shields.io/badge/Ubuntu-22.04%20%7C%2024.04_LTS-E95420?logo=ubuntu&logoColor=white&style=flat-square)
 ![Shell](https://img.shields.io/badge/shell-Bash-4EAA25?logo=gnu-bash&logoColor=white&style=flat-square)
@@ -24,6 +24,7 @@ Cài môi trường · Gỡ sạch có kiểm soát · Chẩn đoán hiệu năn
 - [Script `reset_dev.sh`](#script-reset_devsh)
 - [Script `optimize_dev.sh`](#script-optimize_devsh)
 - [Script `verify_dev.sh`](#script-verify_devsh)
+- [Script `nginx_dev.sh`](#script-nginx_devsh)
 - [Quy trình làm việc chuẩn](#quy-trình-làm-việc-chuẩn)
 - [Kiến trúc trạng thái](#kiến-trúc-trạng-thái)
 - [Nhật ký thay đổi](#nhật-ký-thay-đổi)
@@ -40,15 +41,16 @@ Cài môi trường · Gỡ sạch có kiểm soát · Chẩn đoán hiệu năn
 | **`reset_dev.sh`** | Gỡ sạch môi trường đã cài về đúng trạng thái mới cài OS — **không đụng data** | Test lại vòng cài đặt, debug script setup |
 | **`optimize_dev.sh`** | Chẩn đoán và tối ưu an toàn khi máy chậm / giật lag / treo thoáng qua | Máy phản ánh chậm, build ì, Chrome treo |
 | **`verify_dev.sh`** | State validator **read-only**: xác nhận state `INSTALLED` / `CLEAN` đúng thiết kế | Sau setup/reset, trước khi bàn giao máy |
+| **`nginx_dev.sh`** | Cài / gỡ nginx + quản lý project local (thêm · sửa · bật/tắt · xóa site) | Muốn serve project bằng nginx thay Apache, hoặc cần bộ site `*.test` độc lập |
 
-### Đặc tính chung của cả 4 script
+### Đặc tính chung của cả 5 script
 
 | Đặc tính | Ý nghĩa |
 |---|---|
 | Menu tiếng Việt | Chạy tương tác, chọn số |
 | Cô lập lỗi | Mục nào lỗi chỉ được ghi nhận rồi bỏ qua — **không làm dừng các mục khác** |
 | Idempotent | Chạy lại nhiều lần an toàn — đã cài / đã sạch thì tự bỏ qua |
-| Log mỗi phiên | `logs/setup_*.log` · `logs/reset_*.log` · `logs/optimize_*.log` · `logs/verify_*.log` |
+| Log mỗi phiên | `logs/setup_*.log` · `logs/reset_*.log` · `logs/optimize_*.log` · `logs/verify_*.log` · `logs/nginx_*.log` |
 | Tổng kết cuối phiên | Liệt kê đúng những mục FAIL kèm đường dẫn log |
 | Nhận diện user thật | Cài vào home của user đang đăng nhập (qua `SUDO_USER`) — không rơi vào `/root` |
 
@@ -79,6 +81,7 @@ sudo bash setup_dev.sh              # 1. cài môi trường (hoặc chọn mụ
 sudo bash verify_dev.sh --setup     # 2. xác nhận state INSTALLED — kỳ vọng 0 FAIL
 sudo bash reset_dev.sh              # 3. (tuỳ chọn) gỡ sạch để test lại vòng cài
 sudo bash verify_dev.sh --reset     # 4. xác nhận state CLEAN + data được bảo vệ
+sudo bash nginx_dev.sh              # 5. (tuỳ chọn) cài nginx + quản lý project local
 ```
 
 ---
@@ -309,6 +312,95 @@ chrome  vim  meld  bamboo  flutter  android  vhost  hosts  rootuser  www  docume
 
 ---
 
+## Script `nginx_dev.sh`
+
+Cài đặt / gỡ cài đặt nginx và quản lý project local — độc lập với 4 script kia, cùng pattern menu tiếng Việt.
+
+```bash
+sudo bash nginx_dev.sh
+```
+
+<details>
+<summary><b>Xem menu đầy đủ</b></summary>
+
+```text
+--- NGINX ---
+[1] Cài nginx (kiểm tra cổng 80 trước)
+[2] Trạng thái (service · cổng · nginx -t · site)
+
+--- QUẢN LÝ PROJECT ---
+[3] Tạo project mới (folder + index + vhost)
+[4] Thêm project có sẵn (folder → http://<tên>.test)
+[5] Danh sách site + BẬT/TẮT
+[6] Sửa cấu hình site (editor / domain / docroot)
+[7] Xóa site (giữ nguyên file project)
+
+--- NGHIỆP VỤ ---
+[8] Gỡ hoàn toàn nginx
+[9] Bật lại Apache cổng 80 · tạm tắt nginx
+[0] Thoát
+```
+
+</details>
+
+### Xung đột cổng 80 với Apache2
+
+`setup_dev.sh` cài Apache2 và giữ cổng 80. Khi chạy mục **[1]**, script phát hiện cổng 80 đang bị chiếm và **hỏi người dùng** — không tự ý đụng service khác:
+
+| Lựa chọn | Hệ quả | Cách hoàn tác |
+|---|---|---|
+| **[1] Đổi Apache sang `8080`** | Apache vẫn chạy ở `:8080`, nginx giữ `:80`. Tự backup file gốc (hậu tố `.nginxdev.bak`) | Gỡ nginx (mục **[8]**) tự đưa Apache về `:80` |
+| **[2] Dừng + tắt Apache** | nginx giữ trọn `:80` | Gỡ nginx (mục **[8]**) tự `enable --now apache2` |
+| **[3] Hủy** | Không cài gì | — |
+
+Những gì script làm với Apache được ghi vào manifest `backups/nginx_state.txt` → gỡ nginx biết phải hoàn tác gì.
+
+**Đảo chiều bằng mục [9]** — muốn quay lại Apache làm server chính mà chưa muốn gỡ nginx:
+
+| Mục **[9]** làm | Ghi chú |
+|---|---|
+| `systemctl stop + disable nginx` | Tạm tắt — không tự bật lại khi boot; **mục [1] sẽ bật lại** nginx (kèm hỏi nhường cổng 80 lần nữa) |
+| Đưa Apache về `:80` | Hoàn tác backup `.nginxdev.bak` nếu trước đó đã đổi sang `8080`, hoặc `enable --now apache2` nếu trước đó đã dừng |
+| Xác minh | Hỏi `(y/N)` trước, rồi kiểm tra ai thực sự giữ cổng 80 |
+
+> Trong lúc tạm tắt, site nginx (`http://<tên>.test`) không phản hồi; Apache vhost cũ (nếu có) hoạt động trở lại trên `:80`.
+
+### PHP khi tạo site
+
+| Tình huống | Khi tạo site |
+|---|---|
+| **Đã có socket `php-fpm`** | Dùng ngay → site chạy PHP |
+| **Project có file PHP** mà máy chưa có `php-fpm` | **Hỏi trước**: `Cài PHP-FPM ngay? (Y/n, Enter = có)` → cài rồi sinh block `fastcgi_pass` |
+| Project không có PHP, máy chưa từng cài PHP | Tự cài `php-fpm` + extensions |
+| Project không có PHP, máy đã có PHP (module Apache) | Site chạy **static HTML** + in gợi ý `sudo apt install php-fpm` |
+
+Conf chỉ gắn block `fastcgi_pass` khi socket `/run/php/php*-fpm.sock` tồn tại — tránh `nginx -t` fail vì thiếu module. Ở chế độ static, conf có sẵn `location ~ \.php$ { return 404; }` để nginx **không phát source `.php`** thay vì chạy nó.
+
+> `.htaccess` **không có tác dụng với nginx** — mọi rewrite/redirect trong đó phải đưa thẳng vào `server`/`location` (dùng mục **[6]** mở conf để thêm).
+
+### Cam kết an toàn từng mục
+
+| Mục | Nguyên tắc |
+|---|---|
+| **[3]/[4]** | Tên folder → `slugify` thành domain gợi ý (Enter = dùng ngay, gõ khác = đổi) → sinh conf → thêm `/etc/hosts` → `nginx -t` → **fail thì rollback toàn bộ** (conf + symlink + dòng hosts) |
+| **[5]** Bật/tắt | `nginx -t` fail → trả symlink về trạng thái trước, không để hệ thống treo |
+| **[6]** Sửa | Backup trước khi sửa → `nginx -t` fail → khôi phục file cũ |
+| **[7]** Xóa site | Chỉ xóa conf + symlink + dòng hosts + log của site — **không đụng folder project** |
+| **[8]** Gỡ nginx | `apt-get purge 'nginx*'` (kể cả module phụ) + `autoremove` + dọn `/etc/nginx` + dọn hosts + hoàn tác Apache. **Không bao giờ** đụng `/var/www` |
+| **[9]** Bật lại Apache | Dừng nginx **trước**, mới đưa Apache về `:80` (tránh 2 service giành cổng) — có hỏi `(y/N)` |
+
+> **Tên folder không cần phải là domain hợp lệ.** Mục **[3]/[4]** tự `slugify`: ngắt ranh giới chữ hoa → bỏ ký tự lạ → viết thường → cắt 63 ký tự. Ví dụ `nail360UserLight` → `nail360-user-light` → `http://nail360-user-light.test`. Mục **[4]** luôn in ra `Folder · Site/conf · Domain` rồi hỏi `Enter` để nhận mặc định hoặc gõ domain khác — gõ thiếu hậu tố sẽ tự thêm (`nail360` → `nail360.test`), gõ sai thì **hỏi lại** chứ không thoát, nhấn `Enter` lần nữa là dùng domain mặc định.
+
+### Trạng thái do `nginx_dev.sh` quản lý
+
+```text
+backups/nginx_state.txt     ← APACHE_MODE=port|stopped · NGINX_MODE=paused · DOMAIN đã tạo
+/etc/nginx/sites-available/ ← conf site (sinh bởi script)
+/etc/nginx/sites-enabled/   ← symlink bật/tắt
+```
+
+---
+
 ## Quy trình làm việc chuẩn
 
 ```bash
@@ -323,6 +415,13 @@ sudo bash setup_dev.sh              # cài lại, so sánh kết quả
 
 # ── Thành viên phản ánh máy chậm / treo ──────────────
 sudo bash optimize_dev.sh           # [1] chẩn đoán → xử lý theo gợi ý → [1] xác nhận lại
+
+# ── Chuyển serving project sang nginx ────────────────
+sudo bash nginx_dev.sh              # [1] cài, chọn [1] đổi Apache sang 8080
+sudo bash nginx_dev.sh              # [4] thêm folder có sẵn → http://ten.test
+sudo bash nginx_dev.sh              # [5] bật/tắt site · [6] sửa · [7] xóa site
+sudo bash nginx_dev.sh              # [9] đảo chiều: Apache lại :80, nginx tạm tắt
+sudo bash nginx_dev.sh              # [1] bật lại nginx · [8] gỡ sạch khi không dùng nữa
 ```
 
 ---
@@ -345,7 +444,9 @@ flowchart LR
 
 ## Nhật ký thay đổi
 
-
+| Ngày | Script | Thay đổi |
+|---|---|---|
+| 02/10/2026 | `nginx_dev.sh` | Thêm công cụ cài/gỡ nginx + quản lý project local: menu [1]→[9], nhường cổng 80 cho Apache theo lựa chọn người dùng, mục **[9]** đảo chiều về Apache (tạm tắt nginx), rollback khi `nginx -t` fail, purge `nginx*` khi gỡ |
 
 ---
 
@@ -359,6 +460,12 @@ flowchart LR
 | ZRAM chưa thấy hoạt động sau mục [3] | Khởi động lại máy rồi kiểm tra `swapon --show` |
 | Hoàn tác kernel báo thiếu mạng | Hoàn tác kernel cần Internet để `apt-get install` lại đúng version đã ghi |
 | Một mục FAIL liên tục | Mở file log trong `logs/` tương ứng phiên chạy, tìm dòng `[LỖI]` gần nhất |
+| Cài nginx xong, `curl localhost` không ra site | Chạy mục **[2]** của `nginx_dev.sh` — nếu `Cổng 80` báo bị `apache2` chiếm nghĩa là khi cài đã chọn mục [3] Hủy |
+| Chạy `setup_dev.sh` [3] xong, nginx chết vì Apache giành lại `:80` | Chạy lại `nginx_dev.sh` **[1]** (đã cài thì chỉ start) hoặc `[2]` để xem ai đang giữ cổng 80 |
+| Mở `http://<tên>.test` ra trang mặc định của nginx | Host header chưa khớp `server_name` — kiểm tra dòng `127.0.0.1 <tên>.test` trong `/etc/hosts` (mục **[2]** liệt kê site) |
+| Site báo 502 khi truy cập `index.php` | php-fpm chưa chạy — `systemctl start php8.3-fpm`, hoặc site đang ở chế độ static (xem mục **[2]**) |
+| Vào `http://<tên>.test/` bị **403 Forbidden** | nginx không tìm thấy index. Đọc `/var/log/nginx/<tên>-error.log`: (a) `directory index ... is forbidden` → folder thiếu `index.html` **hoặc** project là PHP nhưng chưa cài `php-fpm` → chạy lại mục **[4]**, trả lời `y` khi được hỏi cài PHP-FPM; (b) thiếu quyền đọc docroot → `chmod 755` các thư mục cha |
+| Đã thấy `[OK] Đã thêm ... vào /etc/hosts` nhưng trình duyệt vẫn `DNS_PROBE_FINISHED_NXDOMAIN` | `/etc/hosts` thiếu newline ở cuối file → entry bị dính vào dòng comment thành `##...##127.0.0.1 x.test`. Chạy lại mục **[4]** (ghi đè = `y`), script tự tách dòng và xác minh lại; `getent hosts <tên>.test` phải ra `127.0.0.1` |
 
 ---
 
@@ -371,14 +478,17 @@ tuanlee-ubuntu-workstation/
 ├── reset_dev.sh               # gỡ sạch về mặc định OS
 ├── optimize_dev.sh            # chẩn đoán + tối ưu an toàn
 ├── verify_dev.sh              # state validator (read-only) cho setup/reset
+├── nginx_dev.sh               # cài/gỡ nginx + quản lý project local
 ├── .gitignore                 # bỏ qua logs/ và backups/
 ├── logs/                      # log tự sinh mỗi phiên chạy (git-ignore)
 │   ├── setup_YYYYMMDD_HHMMSS.log
 │   ├── reset_YYYYMMDD_HHMMSS.log
 │   ├── optimize_YYYYMMDD_HHMMSS.log
-│   └── verify_YYYYMMDD_HHMMSS.log
+│   ├── verify_YYYYMMDD_HHMMSS.log
+│   └── nginx_YYYYMMDD_HHMMSS.log
 └── backups/
-    └── optimize_manifest.txt  # manifest hoàn tác của optimize_dev.sh
+    ├── optimize_manifest.txt  # manifest hoàn tác của optimize_dev.sh
+    └── nginx_state.txt        # state Apache/hosts do nginx_dev.sh tự sinh
 ```
 
 ---
